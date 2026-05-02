@@ -47,3 +47,5 @@ CREATE TABLE public.votes (
     answer_id UUID NOT NULL REFERENCES public.answers(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE
 );
+-- Enable Realtime for multiplayer tables
+ALTER PUBLICATION supabase_realtime ADD TABLE rooms, game_sessions, answers, votes;
