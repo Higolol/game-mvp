@@ -9,6 +9,7 @@ export default function Home() {
   
   // Telegram State
   const [isTelegramEnv, setIsTelegramEnv] = useState(false);
+  const [telegramUserId, setTelegramUserId] = useState<string | null>(null);
 
   // Host state
   const [hostNickname, setHostNickname] = useState('');
@@ -27,10 +28,15 @@ export default function Home() {
       if (webApp.initData) {
         webApp.ready();
         setIsTelegramEnv(true);
-        const tgName = webApp.initDataUnsafe?.user?.first_name;
-        if (tgName) {
-          setJoinNickname(tgName);
-          setHostNickname(tgName);
+        const tgUser = webApp.initDataUnsafe?.user;
+        if (tgUser) {
+          if (tgUser.first_name) {
+            setJoinNickname(tgUser.first_name);
+            setHostNickname(tgUser.first_name);
+          }
+          if (tgUser.id) {
+            setTelegramUserId(String(tgUser.id));
+          }
         }
       }
     }
@@ -47,10 +53,14 @@ export default function Home() {
       // 1. Generate random 4-character alphanumeric uppercase room code
       const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
 
-      // 2. Insert user
+      const generatedId = (isTelegramEnv && telegramUserId) 
+        ? telegramUserId 
+        : crypto.randomUUID();
+
+      // 2. Upsert user
       const { data: userData, error: userError } = await supabase
-        .from('users')
-        .insert([{ nickname: hostNickname.trim(), role: 'Player' }])
+        .from('players')
+        .upsert([{ id: generatedId, nickname: hostNickname.trim() }])
         .select()
         .single();
 
@@ -105,10 +115,14 @@ export default function Home() {
         throw new Error('Комната не найдена или игра уже началась');
       }
 
-      // 2. Insert new user
+      const generatedId = (isTelegramEnv && telegramUserId) 
+        ? telegramUserId 
+        : crypto.randomUUID();
+
+      // 2. Upsert new user
       const { data: userData, error: userError } = await supabase
-        .from('users')
-        .insert([{ nickname: joinNickname.trim(), role: 'Player' }])
+        .from('players')
+        .upsert([{ id: generatedId, nickname: joinNickname.trim() }])
         .select()
         .single();
 
