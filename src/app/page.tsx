@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 
 export default function Home() {
   const router = useRouter();
   
+  // Telegram State
+  const [isTelegramEnv, setIsTelegramEnv] = useState(false);
+
   // Host state
   const [hostNickname, setHostNickname] = useState('');
   const [isHostLoading, setIsHostLoading] = useState(false);
@@ -17,6 +20,21 @@ export default function Home() {
   const [joinNickname, setJoinNickname] = useState('');
   const [isJoinLoading, setIsJoinLoading] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).Telegram?.WebApp) {
+      const webApp = (window as any).Telegram.WebApp;
+      if (webApp.initData) {
+        webApp.ready();
+        setIsTelegramEnv(true);
+        const tgName = webApp.initDataUnsafe?.user?.first_name;
+        if (tgName) {
+          setJoinNickname(tgName);
+          setHostNickname(tgName);
+        }
+      }
+    }
+  }, []);
 
   const handleHostSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,16 +178,23 @@ export default function Home() {
                 <label htmlFor="nickname" className="block text-xs font-medium text-neutral-400 mb-1.5 uppercase tracking-wider">
                   Ваше имя
                 </label>
-                <input
-                  type="text"
-                  id="nickname"
-                  value={joinNickname}
-                  onChange={(e) => setJoinNickname(e.target.value)}
-                  placeholder="Введите ваше имя"
-                  className="w-full bg-neutral-800/50 border border-neutral-700 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
-                  required
-                  disabled={isJoinLoading}
-                />
+                {isTelegramEnv ? (
+                  <div className="w-full bg-indigo-500/10 border border-indigo-500/30 rounded-xl px-4 py-3 text-indigo-200 font-medium flex items-center gap-2 cursor-not-allowed">
+                    <svg className="w-5 h-5 text-indigo-400" fill="currentColor" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.888-.662 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                    {joinNickname}
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    id="nickname"
+                    value={joinNickname}
+                    onChange={(e) => setJoinNickname(e.target.value)}
+                    placeholder="Введите ваше имя"
+                    className="w-full bg-neutral-800/50 border border-neutral-700 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
+                    required
+                    disabled={isJoinLoading}
+                  />
+                )}
               </div>
               {joinError && (
                 <div className="text-red-400 text-sm font-medium">
@@ -209,16 +234,23 @@ export default function Home() {
                 <label htmlFor="hostNickname" className="block text-xs font-medium text-neutral-400 mb-1.5 uppercase tracking-wider">
                   Ваше имя
                 </label>
-                <input
-                  type="text"
-                  id="hostNickname"
-                  value={hostNickname}
-                  onChange={(e) => setHostNickname(e.target.value)}
-                  placeholder="Введите ваше имя (хост)"
-                  className="w-full bg-neutral-800/50 border border-neutral-700 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
-                  required
-                  disabled={isHostLoading}
-                />
+                {isTelegramEnv ? (
+                  <div className="w-full bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3 text-emerald-200 font-medium flex items-center gap-2 cursor-not-allowed">
+                    <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 24 24"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.888-.662 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                    {hostNickname}
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    id="hostNickname"
+                    value={hostNickname}
+                    onChange={(e) => setHostNickname(e.target.value)}
+                    placeholder="Введите ваше имя (хост)"
+                    className="w-full bg-neutral-800/50 border border-neutral-700 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all"
+                    required
+                    disabled={isHostLoading}
+                  />
+                )}
               </div>
               {hostError && (
                 <div className="text-red-400 text-sm font-medium">
