@@ -16,7 +16,7 @@ export async function POST(req: Request) {
           },
           body: JSON.stringify({
             chat_id: chatId,
-            photo: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1000&auto=format&fit=crop',
+            photo: 'https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/start.png',
             caption: 'Добро пожаловать в JXOVO! 🎮\n\nСоздавай комнаты, приглашай друзей и выбирай самые смешные ответы. Готов начать?',
             reply_markup: {
               inline_keyboard: [
