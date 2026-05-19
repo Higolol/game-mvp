@@ -1165,21 +1165,22 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
         </header>
 
         <div className="bg-neutral-900/60 p-6 rounded-3xl border border-neutral-800/80 shadow-2xl backdrop-blur-md">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 px-2">
-            <h2 className="text-xl font-semibold flex items-center gap-3">
-              <span className="h-5 w-1.5 bg-emerald-500 rounded-full"></span>
-              Игроки
-              <span className="bg-neutral-800 text-neutral-400 text-sm px-2.5 py-0.5 rounded-full ml-1">
-                {players.length}
-              </span>
-            </h2>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              {isHost && (
-                <div className="flex flex-col sm:items-end gap-1.5">
+          <div className="flex flex-col mb-6 px-2">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
+              <div className="flex items-center gap-4 flex-wrap">
+                <h2 className="text-xl font-semibold flex items-center gap-3">
+                  <span className="h-5 w-1.5 bg-emerald-500 rounded-full"></span>
+                  Игроки
+                  <span className="bg-neutral-800 text-neutral-400 text-sm px-2.5 py-0.5 rounded-full ml-1">
+                    {players.length}
+                  </span>
+                </h2>
+                
+                {isHost && (
                   <button 
                     onClick={handleAddBot}
                     disabled={isAddingBot}
-                    className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 w-fit"
+                    className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 animate-gentle-blink"
                   >
                     {isAddingBot ? (
                       <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
@@ -1190,15 +1191,19 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                     )}
                     Добавить бота
                   </button>
-                  <span className="text-xs text-neutral-500 sm:text-right max-w-[220px]">
-                    Боты нужны, чтобы можно было играть даже одному или неполной компанией
-                  </span>
-                </div>
-              )}
+                )}
+              </div>
+              
               <div className="text-xs font-medium text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20 uppercase tracking-wider self-start sm:self-center">
                 {getLocalizedStatus(room?.status)}
               </div>
             </div>
+            
+            {isHost && (
+              <span className="text-xs text-neutral-500 w-full text-left mt-1">
+                Боты нужны, чтобы можно было играть даже одному или неполной компанией
+              </span>
+            )}
           </div>
           
           <ul className="space-y-3">

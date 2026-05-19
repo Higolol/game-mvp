@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import Image from 'next/image';
 
 export default function Home() {
   const router = useRouter();
@@ -175,10 +176,15 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 flex flex-col items-center justify-center p-4 font-sans selection:bg-indigo-500/30">
       <main className="w-full max-w-md space-y-12">
-        <div className="text-center space-y-4">
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight bg-gradient-to-br from-white to-neutral-500 bg-clip-text text-transparent">
-            Викторина MVP
-          </h1>
+        <div className="text-center space-y-4 flex flex-col items-center">
+          <Image 
+            src="https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/SunSet%20Glow.png"
+            alt="Викторина MVP"
+            width={256}
+            height={256}
+            className="w-48 md:w-64 h-auto"
+            priority
+          />
           <p className="text-neutral-400 text-sm md:text-base">
             Присоединяйтесь к комнате или создайте новую.
           </p>
