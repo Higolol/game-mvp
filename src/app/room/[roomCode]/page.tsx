@@ -612,7 +612,12 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(`https://game-mvp-tau.vercel.app/room/${roomCode}`);
+    const isTelegram = typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData;
+    const link = isTelegram 
+      ? `https://t.me/JXOVO_bot/jxovo?startapp=${roomCode}`
+      : `https://${window.location.host}/?room=${roomCode}`;
+      
+    navigator.clipboard.writeText(link);
     setHasCopied(true);
     setTimeout(() => setHasCopied(false), 2000);
   };
@@ -1160,7 +1165,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
         </header>
 
         <div className="bg-neutral-900/60 p-6 rounded-3xl border border-neutral-800/80 shadow-2xl backdrop-blur-md">
-          <div className="flex items-center justify-between mb-6 px-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 px-2">
             <h2 className="text-xl font-semibold flex items-center gap-3">
               <span className="h-5 w-1.5 bg-emerald-500 rounded-full"></span>
               Игроки
@@ -1168,24 +1173,29 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                 {players.length}
               </span>
             </h2>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
               {isHost && (
-                <button 
-                  onClick={handleAddBot}
-                  disabled={isAddingBot}
-                  className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50"
-                >
-                  {isAddingBot ? (
-                    <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
-                    </svg>
-                  )}
-                  Добавить бота
-                </button>
+                <div className="flex flex-col sm:items-end gap-1.5">
+                  <button 
+                    onClick={handleAddBot}
+                    disabled={isAddingBot}
+                    className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 w-fit"
+                  >
+                    {isAddingBot ? (
+                      <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+                      </svg>
+                    )}
+                    Добавить бота
+                  </button>
+                  <span className="text-xs text-neutral-500 sm:text-right max-w-[220px]">
+                    Боты нужны, чтобы можно было играть даже одному или неполной компанией
+                  </span>
+                </div>
               )}
-              <div className="text-xs font-medium text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20 uppercase tracking-wider">
+              <div className="text-xs font-medium text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20 uppercase tracking-wider self-start sm:self-center">
                 {getLocalizedStatus(room?.status)}
               </div>
             </div>
