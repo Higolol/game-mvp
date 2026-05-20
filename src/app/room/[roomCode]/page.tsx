@@ -72,6 +72,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
   // Session State
   const [sessionScores, setSessionScores] = useState<Record<string, number>>({});
+  const [roundWinners, setRoundWinners] = useState<Record<number, string>>({});
   const playedQuestionsRef = useRef<string[]>([]);
   const hasSavedResultsRef = useRef(false);
   const scoredRoundsRef = useRef<Set<number>>(new Set());
@@ -159,8 +160,23 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       setCurrentQuestion(null);
       setRoundResults([]);
       botsVotedRef.current = false;
+      setRoundWinners({});
     }
   }, [room?.status]);
+
+  // Reset per-round states on any transition of status, round, or question
+  useEffect(() => {
+    setHasAnswered(false);
+    setAnswerText('');
+    setIsSubmittingAnswer(false);
+    setHasVoted(false);
+    setIsSubmittingVote(false);
+    setVotingOptions([]);
+    setSubmittedAnswersCount(0);
+    setSubmittedVotesCount(0);
+    setRoundResults([]);
+    botsVotedRef.current = false;
+  }, [room?.status, room?.current_round, room?.current_question_id]);
 
   // --- AUTO-TRANSITION TO ROUND 1 & BOT ANSWERS (HOST ONLY) ---
   useEffect(() => {
@@ -278,8 +294,10 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
             table: 'answers',
             filter: `room_code=eq.${roomCode}`
           },
-          () => {
-            setSubmittedAnswersCount(prev => prev + 1);
+          (payload: any) => {
+            if (payload.new && payload.new.question_id === room?.current_question_id) {
+              setSubmittedAnswersCount(prev => prev + 1);
+            }
           }
         )
         .subscribe();
@@ -300,6 +318,23 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     ) {
       const timer = setTimeout(async () => {
         try {
+          // Double-check: Query the database to ensure we have answers for the current room.current_question_id
+          const { data: currentAnswers, error: checkError } = await supabase
+            .from('answers')
+            .select('id')
+            .eq('room_code', roomCode)
+            .eq('question_id', room.current_question_id!);
+            
+          if (checkError) {
+            console.error('Error double-checking answers:', checkError);
+            return;
+          }
+          
+          if (!currentAnswers || currentAnswers.length < players.length) {
+            console.log(`Transition aborted: Only ${currentAnswers?.length || 0}/${players.length} answers in DB for question ${room.current_question_id}`);
+            return;
+          }
+
           const { error } = await supabase
             .from('rooms')
             .update({ status: 'Voting' })
@@ -313,7 +348,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       
       return () => clearTimeout(timer);
     }
-  }, [isHost, room?.status, players.length, submittedAnswersCount, roomCode]);
+  }, [isHost, room?.status, players.length, submittedAnswersCount, roomCode, room?.current_question_id]);
 
   // --- VOTING SETUP & FETCH OPTIONS (ALL PLAYERS) ---
   useEffect(() => {
@@ -409,6 +444,22 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     ) {
       const timer = setTimeout(async () => {
         try {
+          // Double check: Query the database to ensure we have votes for the current room
+          const { data: currentVotes, error: checkError } = await supabase
+            .from('votes')
+            .select('id')
+            .eq('room_code', roomCode);
+            
+          if (checkError) {
+            console.error('Error double-checking votes:', checkError);
+            return;
+          }
+          
+          if (!currentVotes || currentVotes.length < players.length) {
+            console.log(`Transition to results aborted: Only ${currentVotes?.length || 0}/${players.length} votes in DB`);
+            return;
+          }
+
           await supabase
             .from('rooms')
             .update({ status: 'Round Results' })
@@ -467,13 +518,25 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
               const highestVotes = resultsArray[0].votes;
               if (highestVotes > 0) {
                 const winners = resultsArray.filter(r => r.votes === highestVotes);
+                const pointsEarned = 100 * currentRound;
+                
                 setSessionScores(prev => {
                   const newScores = { ...prev };
                   winners.forEach(w => {
-                    newScores[w.author_id] = (newScores[w.author_id] || 0) + 100;
+                    newScores[w.author_id] = (newScores[w.author_id] || 0) + pointsEarned;
                   });
                   return newScores;
                 });
+                
+                setRoundWinners(prev => ({
+                  ...prev,
+                  [currentRound]: winners.map(w => w.author_nickname).join(', ')
+                }));
+              } else {
+                setRoundWinners(prev => ({
+                  ...prev,
+                  [currentRound]: "Никто"
+                }));
               }
             }
           }
@@ -487,77 +550,85 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
   }, [room?.status, roomCode, room?.current_question_id, players]);
 
   // --- AUTO-TRANSITION TO NEXT ROUND / LEADERBOARD (HOST ONLY) ---
-  useEffect(() => {
-    if (isHost && room?.status === 'Round Results') {
-      const timer = setTimeout(async () => {
-        try {
-          const currentRound = room?.current_round || 1;
-          if (currentRound < 3) {
-            const { data: questionsData, error: qError } = await supabase
-              .from('questions')
-              .select('id, fake_answers');
-              
-            if (qError) throw qError;
-            
-            let selectedQuestion: QuestionData | null = null;
-            if (questionsData && questionsData.length > 0) {
-              const availableQuestions = questionsData.filter(q => !playedQuestionsRef.current.includes(q.id));
-              const pool = availableQuestions.length > 0 ? availableQuestions : questionsData;
-              const randomIndex = Math.floor(Math.random() * pool.length);
-              selectedQuestion = pool[randomIndex] as QuestionData;
-              playedQuestionsRef.current.push(selectedQuestion.id);
-            }
-            
-            if (selectedQuestion) {
-              await supabase.from('votes').delete().eq('room_code', roomCode);
-              await supabase.from('answers').delete().eq('room_code', roomCode);
-              
-              await supabase
-                .from('rooms')
-                .update({ 
-                  status: 'Round 1', 
-                  current_question_id: selectedQuestion.id,
-                  current_round: currentRound + 1
-                })
-                .eq('room_code', roomCode);
-                
-              const { data: roomCheck } = await supabase.from('rooms').select('users_ids').eq('room_code', roomCode).single();
-              if (roomCheck?.users_ids) {
-                const { data: currentPlayers } = await supabase.from('players').select('id, nickname').in('id', roomCheck.users_ids);
-                const bots = currentPlayers?.filter(p => p.id.startsWith('bot_')) || [];
-                
-                if (bots.length > 0) {
-                  const botAnswers = bots.map(bot => {
-                    const fakes = selectedQuestion!.fake_answers || [];
-                    const randomAnswer = fakes.length > 0 
-                      ? fakes[Math.floor(Math.random() * fakes.length)] 
-                      : 'Бот ответ';
-                    
-                    return {
-                      question_id: selectedQuestion!.id,
-                      user_id: bot.id,
-                      room_code: roomCode,
-                      answer_text: randomAnswer
-                    };
-                  });
-                  await supabase.from('answers').insert(botAnswers);
-                }
-              }
-            }
-          } else {
-            await supabase
-              .from('rooms')
-              .update({ status: 'Leaderboard' })
-              .eq('room_code', roomCode);
-          }
-        } catch (err) {
-          console.error('Error in transition:', err);
+  const startNextRound = async () => {
+    if (!isHost) return;
+    
+    // Force Local State Clearing on Transitions immediately
+    setHasAnswered(false);
+    setAnswerText('');
+    setIsSubmittingAnswer(false);
+    setHasVoted(false);
+    setIsSubmittingVote(false);
+    setVotingOptions([]);
+    setSubmittedAnswersCount(0);
+    setSubmittedVotesCount(0);
+    setRoundResults([]);
+    botsVotedRef.current = false;
+
+    try {
+      const currentRound = room?.current_round || 1;
+      if (currentRound < 3) {
+        const { data: questionsData, error: qError } = await supabase
+          .from('questions')
+          .select('id, fake_answers');
+          
+        if (qError) throw qError;
+        
+        let selectedQuestion: QuestionData | null = null;
+        if (questionsData && questionsData.length > 0) {
+          const availableQuestions = questionsData.filter(q => !playedQuestionsRef.current.includes(q.id));
+          const pool = availableQuestions.length > 0 ? availableQuestions : questionsData;
+          const randomIndex = Math.floor(Math.random() * pool.length);
+          selectedQuestion = pool[randomIndex] as QuestionData;
+          playedQuestionsRef.current.push(selectedQuestion.id);
         }
-      }, 8000);
-      
-      return () => clearTimeout(timer);
+        
+        if (selectedQuestion) {
+          await supabase.from('votes').delete().eq('room_code', roomCode);
+          await supabase.from('answers').delete().eq('room_code', roomCode);
+          
+          await supabase
+            .from('rooms')
+            .update({ 
+              status: 'Round 1', 
+              current_question_id: selectedQuestion.id,
+              current_round: currentRound + 1
+            })
+            .eq('room_code', roomCode);
+            
+          const { data: roomCheck } = await supabase.from('rooms').select('users_ids').eq('room_code', roomCode).single();
+          if (roomCheck?.users_ids) {
+            const { data: currentPlayers } = await supabase.from('players').select('id, nickname').in('id', roomCheck.users_ids);
+            const bots = currentPlayers?.filter(p => p.id.startsWith('bot_')) || [];
+            
+            if (bots.length > 0) {
+              const botAnswers = bots.map(bot => {
+                const fakes = selectedQuestion!.fake_answers || [];
+                const randomAnswer = fakes.length > 0 
+                  ? fakes[Math.floor(Math.random() * fakes.length)] 
+                  : 'Бот ответ';
+                
+                return {
+                  question_id: selectedQuestion!.id,
+                  user_id: bot.id,
+                  room_code: roomCode,
+                  answer_text: randomAnswer
+                };
+              });
+              await supabase.from('answers').insert(botAnswers);
+            }
+          }
+        }
+      } else {
+        await supabase
+          .from('rooms')
+          .update({ status: 'Leaderboard' })
+          .eq('room_code', roomCode);
+      }
+    } catch (err) {
+      console.error('Error in transition:', err);
     }
-  }, [isHost, room?.status, roomCode, room?.current_round]);
+  };
 
   // --- SAVE GAME RESULTS (HOST ONLY) ---
   useEffect(() => {
@@ -661,6 +732,18 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       return;
     }
     
+    // Force Local State Clearing on Transitions immediately
+    setHasAnswered(false);
+    setAnswerText('');
+    setIsSubmittingAnswer(false);
+    setHasVoted(false);
+    setIsSubmittingVote(false);
+    setVotingOptions([]);
+    setSubmittedAnswersCount(0);
+    setSubmittedVotesCount(0);
+    setRoundResults([]);
+    botsVotedRef.current = false;
+
     try {
       const { error: updateError } = await supabase
         .from('rooms')
@@ -729,6 +812,19 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
   const handleReturnToLobby = async () => {
     if (!isHost) return;
+    
+    // Force Local State Clearing on Transitions immediately
+    setHasAnswered(false);
+    setAnswerText('');
+    setIsSubmittingAnswer(false);
+    setHasVoted(false);
+    setIsSubmittingVote(false);
+    setVotingOptions([]);
+    setSubmittedAnswersCount(0);
+    setSubmittedVotesCount(0);
+    setRoundResults([]);
+    botsVotedRef.current = false;
+
     try {
       // 1. Delete votes and answers for cleanup
       await supabase.from('votes').delete().eq('room_code', roomCode);
@@ -743,6 +839,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       
       hasSavedResultsRef.current = false;
       setSessionScores({});
+      setRoundWinners({});
       scoredRoundsRef.current.clear();
       playedQuestionsRef.current = [];
       
@@ -815,9 +912,20 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                   <span className="text-5xl">👑</span>
                 </div>
                 <h2 className="text-3xl font-extrabold text-amber-400">{overallWinner.nickname}</h2>
-                <p className="text-neutral-400 mt-2 font-medium">Победитель игры ({sessionScores[overallWinner.id] || 0} очков)</p>
+                <p className="text-neutral-400 mt-2 font-medium">Абсолютный чемпион ({sessionScores[overallWinner.id] || 0} очков)</p>
               </div>
             )}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              {[1, 2, 3].map(roundNum => (
+                <div key={roundNum} className="bg-neutral-950/40 border border-neutral-800/50 p-4 rounded-2xl text-center">
+                  <div className="text-xs text-neutral-500 uppercase tracking-wider mb-2 font-bold">Раунд {roundNum}</div>
+                  <div className="text-indigo-400 font-semibold truncate text-lg">
+                    {roundWinners[roundNum] || "Никто"}
+                  </div>
+                </div>
+              ))}
+            </div>
 
             <div className="space-y-3 mt-8">
               <h3 className="text-sm font-semibold text-neutral-500 uppercase tracking-widest text-center mb-4">Таблица лидеров</h3>
@@ -839,18 +947,31 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
             </div>
           </div>
 
-          {isHost && (
-            <div className="pt-8">
+          {isHost ? (
+            <div className="pt-8 w-full flex flex-col items-center gap-4">
               <button 
                 onClick={handleReturnToLobby}
+                className="w-full md:w-auto md:min-w-[300px] px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.2)] hover:shadow-[0_0_60px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98] text-lg"
+              >
+                Сыграть ещё раз тем же составом
+              </button>
+              <button 
+                onClick={() => router.push('/')}
                 className="w-full md:w-auto md:min-w-[300px] px-8 py-4 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white font-bold rounded-2xl transition-all active:scale-[0.98] text-lg shadow-xl"
               >
-                Вернуться в лобби
+                Создать новую комнату
               </button>
             </div>
-          )}
-          {!isHost && (
-            <p className="text-neutral-500 animate-pulse pt-8">Ожидание решения хоста...</p>
+          ) : (
+            <div className="pt-8 w-full flex flex-col items-center gap-4">
+              <p className="text-neutral-500 animate-pulse font-medium mb-2">Ожидание решения хоста...</p>
+              <button 
+                onClick={() => router.push('/')}
+                className="w-full md:w-auto md:min-w-[300px] px-8 py-4 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white font-bold rounded-2xl transition-all active:scale-[0.98] text-lg shadow-xl"
+              >
+                Создать новую комнату
+              </button>
+            </div>
           )}
         </main>
       </div>
@@ -943,6 +1064,19 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
           ) : (
              <div className="flex justify-center p-8 text-neutral-500 animate-pulse">Подсчет результатов...</div>
           )}
+          
+          <div className="pt-8 flex flex-col items-center">
+            {isHost ? (
+              <button 
+                onClick={startNextRound}
+                className="w-full md:w-auto md:min-w-[300px] px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.2)] hover:shadow-[0_0_60px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98] text-lg"
+              >
+                {room?.current_round === 3 ? "Перейти к итогам игры" : "Перейти к следующему раунду"}
+              </button>
+            ) : (
+              <p className="text-neutral-500 animate-pulse text-lg font-medium">Хост переводит игру в следующий раунд...</p>
+            )}
+          </div>
         </main>
       </div>
     );
