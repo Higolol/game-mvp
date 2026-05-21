@@ -52,6 +52,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
   const [hasCopied, setHasCopied] = useState(false);
   const [isAddingBot, setIsAddingBot] = useState(false);
+  const [customBotName, setCustomBotName] = useState("");
 
   // Round 1 States
   const [currentQuestion, setCurrentQuestion] = useState<QuestionData | null>(null);
@@ -217,11 +218,16 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
             const bots = currentPlayers?.filter(p => p.id.startsWith('bot_')) || [];
             
             if (bots.length > 0) {
+              const fakes = selectedQuestion?.fake_answers || [];
+              const shuffledFakes = [...fakes].sort(() => Math.random() - 0.5);
+
               const botAnswers = bots.map(bot => {
-                const fakes = selectedQuestion?.fake_answers || [];
-                const randomAnswer = fakes.length > 0 
-                  ? fakes[Math.floor(Math.random() * fakes.length)] 
-                  : 'Бот ответ';
+                let randomAnswer = "";
+                if (shuffledFakes.length > 0) {
+                  randomAnswer = shuffledFakes.pop()!;
+                } else {
+                  randomAnswer = `${bot.nickname} многозначительно молчит...`;
+                }
                 
                 return {
                   question_id: selectedQuestion!.id,
@@ -602,11 +608,16 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
             const bots = currentPlayers?.filter(p => p.id.startsWith('bot_')) || [];
             
             if (bots.length > 0) {
+              const fakes = selectedQuestion!.fake_answers || [];
+              const shuffledFakes = [...fakes].sort(() => Math.random() - 0.5);
+
               const botAnswers = bots.map(bot => {
-                const fakes = selectedQuestion!.fake_answers || [];
-                const randomAnswer = fakes.length > 0 
-                  ? fakes[Math.floor(Math.random() * fakes.length)] 
-                  : 'Бот ответ';
+                let randomAnswer = "";
+                if (shuffledFakes.length > 0) {
+                  randomAnswer = shuffledFakes.pop()!;
+                } else {
+                  randomAnswer = `${bot.nickname} многозначительно молчит...`;
+                }
                 
                 return {
                   question_id: selectedQuestion!.id,
@@ -698,7 +709,29 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     setIsAddingBot(true);
     
     try {
-      const botNickname = `Bot_${Math.floor(Math.random() * 1000)}`;
+      let botNickname = "";
+      const trimmedCustomName = customBotName.trim();
+      
+      if (trimmedCustomName) {
+        botNickname = trimmedCustomName;
+      } else {
+        try {
+          const { data, error } = await supabase
+            .from('bot_names')
+            .select('name');
+            
+          if (error || !data || data.length === 0) {
+            botNickname = `Бот ${Math.floor(Math.random() * 1000)}`;
+          } else {
+            const randomIndex = Math.floor(Math.random() * data.length);
+            botNickname = data[randomIndex].name;
+          }
+        } catch (fetchErr) {
+          console.error('Failed to fetch from bot_names, falling back:', fetchErr);
+          botNickname = `Бот ${Math.floor(Math.random() * 1000)}`;
+        }
+      }
+
       const botId = `bot_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
       
       const { data: botData, error: botError } = await supabase
@@ -718,6 +751,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
         
       if (updateError) throw updateError;
       
+      setCustomBotName("");
       await fetchLobbyData();
     } catch (err) {
       console.error('Error adding bot:', err);
@@ -1311,20 +1345,30 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                 </h2>
                 
                 {isHost && (
-                  <button 
-                    onClick={handleAddBot}
-                    disabled={isAddingBot}
-                    className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 animate-gentle-blink"
-                  >
-                    {isAddingBot ? (
-                      <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
-                      </svg>
-                    )}
-                    Добавить бота
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      type="text"
+                      placeholder="Имя бота (необяз.)"
+                      value={customBotName}
+                      onChange={(e) => setCustomBotName(e.target.value)}
+                      disabled={isAddingBot}
+                      className="bg-neutral-950/60 border border-neutral-800 rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 w-32 sm:w-36 transition-all"
+                    />
+                    <button 
+                      onClick={handleAddBot}
+                      disabled={isAddingBot}
+                      className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 animate-gentle-blink"
+                    >
+                      {isAddingBot ? (
+                        <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+                        </svg>
+                      )}
+                      Добавить бота
+                    </button>
+                  </div>
                 )}
               </div>
               
