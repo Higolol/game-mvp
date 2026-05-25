@@ -1,8 +1,135 @@
 "use client";
 
-import React, { use, useEffect, useState, useCallback, useRef } from 'react';
+import React, { use, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { QRCodeSVG } from 'qrcode.react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+function useSoundEffect(url: string) {
+  const audio = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      const a = new Audio(url);
+      a.preload = 'auto';
+      return a;
+    }
+    return null;
+  }, [url]);
+
+  const play = useCallback(() => {
+    if (audio) {
+      audio.currentTime = 0;
+      audio.play().catch(err => {
+        console.warn("Audio playback failed or was blocked by browser autoplay policy:", err);
+      });
+    }
+  }, [audio]);
+
+  return play;
+}
+
+function useGameMusic(status: string | undefined) {
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('jxovo_music_muted') === 'true';
+    }
+    return false;
+  });
+
+  const lobbyAudioRef = useRef<HTMLAudioElement | null>(null);
+  const resultsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Initialize audio elements
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const lobbyAudio = new Audio('https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/Cleo%20Francis,%20Ellis%20Kent%20-%20Get%20The%20Bleep%20Up.mp3');
+    lobbyAudio.loop = true;
+    lobbyAudio.preload = 'auto';
+
+    const resultsAudio = new Audio('https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/Cleo%20Francis,%20Ellis%20Kent%20-%20Space%20Walk%20West.mp3');
+    resultsAudio.loop = true;
+    resultsAudio.preload = 'auto';
+
+    lobbyAudioRef.current = lobbyAudio;
+    resultsAudioRef.current = resultsAudio;
+
+    return () => {
+      lobbyAudio.pause();
+      resultsAudio.pause();
+    };
+  }, []);
+
+  // Sync mute state
+  useEffect(() => {
+    if (lobbyAudioRef.current) lobbyAudioRef.current.muted = isMuted;
+    if (resultsAudioRef.current) resultsAudioRef.current.muted = isMuted;
+  }, [isMuted]);
+
+  // Handle music state transitions based on room status
+  useEffect(() => {
+    const lobbyAudio = lobbyAudioRef.current;
+    const resultsAudio = resultsAudioRef.current;
+    if (!lobbyAudio || !resultsAudio) return;
+
+    const isResultsState = status === 'Round Results' || status === 'Leaderboard';
+
+    if (isResultsState) {
+      lobbyAudio.pause();
+      if (!isMuted) {
+        resultsAudio.play().catch(() => {
+          // Blocked initially until interaction
+        });
+      }
+    } else {
+      resultsAudio.pause();
+      if (!isMuted) {
+        lobbyAudio.play().catch(() => {
+          // Blocked initially until interaction
+        });
+      }
+    }
+  }, [status, isMuted]);
+
+  // Global interaction listener to resume audio if initially blocked by browser policy
+  useEffect(() => {
+    const handleInteraction = () => {
+      const lobbyAudio = lobbyAudioRef.current;
+      const resultsAudio = resultsAudioRef.current;
+      if (!lobbyAudio || !resultsAudio || isMuted) return;
+
+      const isResultsState = status === 'Round Results' || status === 'Leaderboard';
+
+      if (isResultsState && resultsAudio.paused) {
+        resultsAudio.play().catch(() => {});
+      } else if (!isResultsState && lobbyAudio.paused) {
+        lobbyAudio.play().catch(() => {});
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('click', handleInteraction, { once: true });
+      window.addEventListener('touchstart', handleInteraction, { once: true });
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('click', handleInteraction);
+        window.removeEventListener('touchstart', handleInteraction);
+      }
+    };
+  }, [status, isMuted]);
+
+  const toggleMute = () => {
+    setIsMuted(prev => {
+      const newMute = !prev;
+      localStorage.setItem('jxovo_music_muted', String(newMute));
+      return newMute;
+    });
+  };
+
+  return { isMuted, toggleMute };
+}
 
 interface Player {
   id: string;
@@ -77,6 +204,17 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
   const playedQuestionsRef = useRef<string[]>([]);
   const hasSavedResultsRef = useRef(false);
   const scoredRoundsRef = useRef<Set<number>>(new Set());
+
+  const [qrSource, setQrSource] = useState<'web' | 'tg'>('web');
+  const [qrCopied, setQrCopied] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<number>(60);
+  const [selectedVoteId, setSelectedVoteId] = useState<string | null>(null);
+  const [isAnswerSubmittedClicked, setIsAnswerSubmittedClicked] = useState(false);
+
+  const playWhoosh = useSoundEffect('https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/fireball-whoosh_gknwssnu.mp3');
+  const playSwing = useSoundEffect('https://zboparcletaettrhjzyw.supabase.co/storage/v1/object/public/public-assets/slow-swing.mp3');
+
+  const { isMuted, toggleMute } = useGameMusic(room?.status);
 
   const isHost = room?.host_id === userId;
 
@@ -177,7 +315,153 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     setSubmittedVotesCount(0);
     setRoundResults([]);
     botsVotedRef.current = false;
+    setTimeLeft(60);
+    setSelectedVoteId(null);
+    setIsAnswerSubmittedClicked(false);
   }, [room?.status, room?.current_round, room?.current_question_id]);
+
+  const triggerHaptics = () => {
+    if (typeof window !== 'undefined' && window.navigator && typeof window.navigator.vibrate === 'function') {
+      try {
+        window.navigator.vibrate(50);
+      } catch (e) {
+        console.warn("Haptic feedback error:", e);
+      }
+    }
+  };
+
+  // Timer decrement effect
+  useEffect(() => {
+    if (room?.status !== 'Round 1' && room?.status !== 'Voting') return;
+    
+    const interval = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        
+        const nextTime = prev - 1;
+        
+        // Play synthetic ticking sound under 10 seconds if not finished yet
+        if (nextTime <= 10) {
+          const isFinished = room?.status === 'Round 1' ? hasAnswered : hasVoted;
+          if (!isFinished) {
+            try {
+              const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+              const osc = audioCtx.createOscillator();
+              const gainNode = audioCtx.createGain();
+              osc.connect(gainNode);
+              gainNode.connect(audioCtx.destination);
+              osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+              gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+              gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+              osc.start();
+              osc.stop(audioCtx.currentTime + 0.08);
+            } catch (e) {
+              console.warn("Ticking sound blocked or failed:", e);
+            }
+          }
+        }
+        
+        return nextTime;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [room?.status, room?.current_round, room?.current_question_id, hasAnswered, hasVoted]);
+
+  // Timer auto-submit and Host-driven fallback transition effect
+  useEffect(() => {
+    if (timeLeft === 0) {
+      if (room?.status === 'Round 1' && !hasAnswered) {
+        const submitRandomAnswer = async () => {
+          let randomAnswerText = "";
+          if (currentQuestion?.fake_answers && currentQuestion.fake_answers.length > 0) {
+            const index = Math.floor(Math.random() * currentQuestion.fake_answers.length);
+            randomAnswerText = currentQuestion.fake_answers[index];
+          } else {
+            randomAnswerText = "Моё время истекло, но мой дух силён! ⚡";
+          }
+          
+          setIsSubmittingAnswer(true);
+          try {
+            const { error } = await supabase
+              .from('answers')
+              .insert([{
+                question_id: currentQuestion?.id || room?.current_question_id,
+                user_id: userId,
+                room_code: roomCode,
+                answer_text: randomAnswerText
+              }]);
+            if (error) throw error;
+            setHasAnswered(true);
+          } catch (err) {
+            console.error('Error auto-submitting answer:', err);
+          } finally {
+            setIsSubmittingAnswer(false);
+          }
+        };
+        submitRandomAnswer();
+      } else if (room?.status === 'Voting' && !hasVoted) {
+        const submitRandomVote = async () => {
+          if (votingOptions.length === 0) return;
+          
+          const validOptions = votingOptions.filter(opt => opt.user_id !== userId);
+          const chosenAnswer = validOptions.length > 0 
+            ? validOptions[Math.floor(Math.random() * validOptions.length)]
+            : votingOptions[0];
+            
+          if (!chosenAnswer) return;
+          
+          setIsSubmittingVote(true);
+          try {
+            const { error } = await supabase
+              .from('votes')
+              .insert([{
+                answer_id: chosenAnswer.id,
+                user_id: userId,
+                room_code: roomCode
+              }]);
+            if (error) throw error;
+            setHasVoted(true);
+          } catch (err) {
+            console.error('Error auto-submitting vote:', err);
+          } finally {
+            setIsSubmittingVote(false);
+          }
+        };
+        submitRandomVote();
+      }
+      
+      if (isHost) {
+        const transitionOnTimeout = async () => {
+          try {
+            if (room?.status === 'Round 1') {
+              setTimeout(async () => {
+                const { data: latestRoom } = await supabase.from('rooms').select('status').eq('room_code', roomCode).single();
+                if (latestRoom?.status === 'Round 1') {
+                  console.log("Host forcing transition to Voting phase on timeout");
+                  await supabase.from('rooms').update({ status: 'Voting' }).eq('room_code', roomCode);
+                }
+              }, 1500);
+            } else if (room?.status === 'Voting') {
+              setTimeout(async () => {
+                const { data: latestRoom } = await supabase.from('rooms').select('status').eq('room_code', roomCode).single();
+                if (latestRoom?.status === 'Voting') {
+                  console.log("Host forcing transition to Round Results phase on timeout");
+                  await supabase.from('rooms').update({ status: 'Round Results' }).eq('room_code', roomCode);
+                }
+              }, 1500);
+            }
+          } catch (err) {
+            console.error('Host transition on timeout error:', err);
+          }
+        };
+        transitionOnTimeout();
+      }
+    }
+  }, [timeLeft, room?.status, hasAnswered, hasVoted, currentQuestion, votingOptions, isHost, roomCode, userId]);
 
   // --- AUTO-TRANSITION TO ROUND 1 & BOT ANSWERS (HOST ONLY) ---
   useEffect(() => {
@@ -598,6 +882,9 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     setSubmittedVotesCount(0);
     setRoundResults([]);
     botsVotedRef.current = false;
+    setTimeLeft(60);
+    setSelectedVoteId(null);
+    setIsAnswerSubmittedClicked(false);
 
     try {
       const currentRound = room?.current_round || 1;
@@ -727,9 +1014,104 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       ? `https://t.me/JXOVO_bot/jxovo?startapp=${roomCode}`
       : `https://${window.location.host}/?room=${roomCode}`;
       
-    navigator.clipboard.writeText(link);
-    setHasCopied(true);
-    setTimeout(() => setHasCopied(false), 2000);
+    copyToClipboard(link);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setHasCopied(true);
+      setTimeout(() => setHasCopied(false), 2000);
+    }).catch(err => {
+      console.error('Failed to copy link:', err);
+    });
+  };
+
+  const handleShareInvite = async () => {
+    const inviteUrl = qrSource === 'web' 
+      ? `https://jxovo.fun/room/${roomCode}` 
+      : `https://t.me/JXOVO_bot/jxovo?startapp=${roomCode}`;
+      
+    const shareText = `🚀 Присоединяйтесь к игре JXOVO! Мы в комнате ${roomCode}. Заходите поиграть: ${inviteUrl}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Присоединяйтесь к JXOVO!',
+          text: shareText,
+          url: inviteUrl
+        });
+      } catch (err) {
+        console.warn('Native share failed, falling back to clipboard copy:', err);
+        copyToClipboard(inviteUrl);
+      }
+    } else {
+      copyToClipboard(inviteUrl);
+    }
+  };
+
+  const handleCopyQR = async () => {
+    try {
+      const svg = document.getElementById('qr-code-svg');
+      if (!svg) throw new Error('QR SVG not found');
+      
+      const svgString = new XMLSerializer().serializeToString(svg);
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const URL = window.URL || window.webkitURL || window;
+      const blobURL = URL.createObjectURL(svgBlob);
+      
+      const image = new Image();
+      image.onload = async () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = svg.clientWidth || 130;
+        canvas.height = svg.clientHeight || 130;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.fillStyle = '#FFFFFF';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(image, 0, 0);
+          
+          canvas.toBlob(async (blob) => {
+            if (blob) {
+              try {
+                await navigator.clipboard.write([
+                  new ClipboardItem({ 'image/png': blob })
+                ]);
+                setQrCopied(true);
+                setTimeout(() => setQrCopied(false), 2000);
+              } catch (err) {
+                console.error('Clipboard write failed:', err);
+              }
+            }
+          }, 'image/png');
+        }
+      };
+      image.src = blobURL;
+    } catch (err) {
+      console.error('Error copying QR:', err);
+    }
+  };
+
+
+
+  const renderMuteButton = () => {
+    return (
+      <button
+        onClick={toggleMute}
+        className="fixed top-4 right-4 z-50 p-3 bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 rounded-full transition-all text-neutral-300 hover:text-white shadow-lg cursor-pointer"
+        title={isMuted ? "Включить музыку" : "Выключить музыку"}
+      >
+        {isMuted ? (
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+          </svg>
+        ) : (
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 animate-[pulse_2s_infinite]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M12 18.75V5.25L7.75 9.5H4.5v5h3.25L12 18.75z" />
+          </svg>
+        )}
+      </button>
+    );
   };
 
   const handleAddBot = async () => {
@@ -827,6 +1209,8 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     e.preventDefault();
     if (!answerText.trim() || !currentQuestion || !userId) return;
     
+    triggerHaptics();
+    setIsAnswerSubmittedClicked(true);
     setIsSubmittingAnswer(true);
     
     try {
@@ -841,10 +1225,12 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
         
       if (error) throw error;
       
+      playWhoosh();
       setHasAnswered(true);
     } catch (err) {
       console.error('Error submitting answer:', err);
       alert('Ошибка при отправке ответа');
+      setIsAnswerSubmittedClicked(false);
     } finally {
       setIsSubmittingAnswer(false);
     }
@@ -852,6 +1238,8 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
   const handleVoteSubmit = async (answerId: string) => {
     if (!userId || isSubmittingVote) return;
+    triggerHaptics();
+    setSelectedVoteId(answerId);
     setIsSubmittingVote(true);
     
     try {
@@ -864,10 +1252,12 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
         }]);
         
       if (error) throw error;
+      playSwing();
       setHasVoted(true);
     } catch (err) {
       console.error('Error submitting vote:', err);
       alert('Ошибка при отправке голоса');
+      setSelectedVoteId(null);
       setIsSubmittingVote(false);
     }
   };
@@ -886,6 +1276,9 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     setSubmittedVotesCount(0);
     setRoundResults([]);
     botsVotedRef.current = false;
+    setTimeLeft(60);
+    setSelectedVoteId(null);
+    setIsAnswerSubmittedClicked(false);
 
     try {
       // 1. Delete votes and answers for cleanup
@@ -1163,6 +1556,30 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
           </header>
 
           <div className="bg-neutral-900/60 p-6 md:p-10 rounded-3xl border border-neutral-800/80 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] backdrop-blur-xl relative overflow-hidden">
+            
+            {/* Countdown Timer Widget */}
+            <div className="w-full space-y-2 mb-8 relative z-10">
+              <div className="flex justify-between items-center text-sm font-semibold tracking-wider text-neutral-400">
+                <span className="flex items-center gap-1.5">
+                  <span className={`w-2.5 h-2.5 rounded-full ${timeLeft <= 10 ? 'bg-rose-500 animate-ping' : 'bg-indigo-500 animate-pulse'}`}></span>
+                  {timeLeft <= 10 ? 'ВРЕМЯ НА ИСХОДЕ!' : 'ОСТАЛОСЬ ВРЕМЕНИ:'}
+                </span>
+                <span className={`font-mono text-lg font-black ${timeLeft <= 10 ? 'text-rose-500 scale-110' : 'text-indigo-400'} transition-all duration-300`}>
+                  {timeLeft} сек
+                </span>
+              </div>
+              <div className="h-3 w-full bg-neutral-950 rounded-full overflow-hidden border border-neutral-800 p-0.5">
+                <div 
+                  className={`h-full rounded-full transition-all duration-1000 ${
+                    timeLeft <= 10 
+                      ? 'bg-gradient-to-r from-red-500 to-rose-600 animate-[pulse_1s_infinite]' 
+                      : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500'
+                  }`}
+                  style={{ width: `${(timeLeft / 60) * 100}%` }}
+                />
+              </div>
+            </div>
+
             {!hasVoted ? (
               <div className="space-y-4 relative z-10 flex flex-col">
                 {votingOptions.length > 0 ? (
@@ -1176,6 +1593,8 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                         className={`w-full py-5 px-6 rounded-2xl text-left transition-all text-lg font-medium border ${
                           isOwnAnswer 
                             ? 'bg-neutral-900/50 border-neutral-800/50 text-neutral-600 cursor-not-allowed'
+                            : opt.id === selectedVoteId
+                            ? 'bg-white/20 border-white ring-2 ring-white scale-[0.98] text-white shadow-lg shadow-white/10'
                             : 'bg-neutral-800/80 hover:bg-indigo-600/20 border-neutral-700 hover:border-indigo-500/50 text-white shadow-lg hover:shadow-[0_0_20px_rgba(99,102,241,0.15)] active:scale-[0.98]'
                         }`}
                       >
@@ -1247,6 +1666,29 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
           <div className="bg-neutral-900/60 p-6 md:p-10 rounded-3xl border border-neutral-800/80 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.5)] backdrop-blur-xl relative overflow-hidden">
             <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
+            {/* Countdown Timer Widget */}
+            <div className="w-full space-y-2 mb-8 relative z-10">
+              <div className="flex justify-between items-center text-sm font-semibold tracking-wider text-neutral-400">
+                <span className="flex items-center gap-1.5">
+                  <span className={`w-2.5 h-2.5 rounded-full ${timeLeft <= 10 ? 'bg-rose-500 animate-ping' : 'bg-indigo-500 animate-pulse'}`}></span>
+                  {timeLeft <= 10 ? 'ВРЕМЯ НА ИСХОДЕ!' : 'ОСТАЛОСЬ ВРЕМЕНИ:'}
+                </span>
+                <span className={`font-mono text-lg font-black ${timeLeft <= 10 ? 'text-rose-500 scale-110' : 'text-indigo-400'} transition-all duration-300`}>
+                  {timeLeft} сек
+                </span>
+              </div>
+              <div className="h-3 w-full bg-neutral-950 rounded-full overflow-hidden border border-neutral-800 p-0.5">
+                <div 
+                  className={`h-full rounded-full transition-all duration-1000 ${
+                    timeLeft <= 10 
+                      ? 'bg-gradient-to-r from-red-500 to-rose-600 animate-[pulse_1s_infinite]' 
+                      : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500'
+                  }`}
+                  style={{ width: `${(timeLeft / 60) * 100}%` }}
+                />
+              </div>
+            </div>
+
             {!hasAnswered ? (
               <form onSubmit={handleAnswerSubmit} className="space-y-6 relative z-10">
                 <div>
@@ -1268,7 +1710,11 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                 <button
                   type="submit"
                   disabled={isSubmittingAnswer || !currentQuestion || !answerText.trim()}
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-5 px-8 rounded-2xl transition-all active:scale-[0.98] shadow-[0_0_30px_rgba(79,70,229,0.2)] hover:shadow-[0_0_40px_rgba(79,70,229,0.3)] text-xl"
+                  className={`w-full text-white font-bold py-5 px-8 rounded-2xl transition-all active:scale-[0.98] text-xl ${
+                    isAnswerSubmittedClicked
+                      ? 'bg-white/20 ring-2 ring-white'
+                      : 'bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_30px_rgba(79,70,229,0.2)] hover:shadow-[0_0_40px_rgba(79,70,229,0.3)]'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   {isSubmittingAnswer ? 'Отправка...' : 'Ответить'}
                 </button>
@@ -1328,35 +1774,158 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
   // --- DEFAULT LOBBY WIDGET ('Waiting' or fallback) ---
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 flex flex-col items-center p-4 md:p-8 font-sans selection:bg-indigo-500/30">
+      {renderMuteButton()}
       <main className="w-full max-w-2xl mt-8 md:mt-16 space-y-8">
+        
         <header className="text-center space-y-2">
           <h1 className="text-xl md:text-2xl font-semibold text-neutral-500 uppercase tracking-widest">Игровое лобби</h1>
           <div className="flex flex-col items-center justify-center gap-4">
-            <div className="flex items-center gap-3 bg-neutral-900/40 px-8 py-4 rounded-3xl border border-neutral-800">
-              <span className="text-6xl md:text-8xl font-black tracking-widest text-indigo-400 uppercase drop-shadow-md">
+            <div className="bg-neutral-900/40 px-8 py-4 rounded-3xl border border-neutral-800 flex items-center justify-center">
+              <span className="text-6xl md:text-8xl font-mono font-black tracking-widest text-indigo-400 uppercase drop-shadow-md">
                 {room?.room_code}
               </span>
-              <button 
-                onClick={handleCopyLink}
-                className="ml-2 p-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl transition-all text-neutral-300 hover:text-white"
-                title="Скопировать ссылку"
-              >
-                {hasCopied ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                )}
-              </button>
             </div>
             {hasCopied ? (
               <p className="text-emerald-400 text-sm font-medium animate-pulse">Ссылка скопирована в буфер обмена!</p>
             ) : (
               <p className="text-neutral-400 text-sm">Поделитесь этим кодом или ссылкой с друзьями</p>
             )}
+
+            {/* Dynamic QR Code Generator */}
+            {(() => {
+              const qrUrl = qrSource === 'web' 
+                ? `https://jxovo.fun/room/${roomCode}` 
+                : `https://t.me/JXOVO_bot/jxovo?startapp=${roomCode}`;
+              
+              return (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex flex-col items-center gap-4 bg-neutral-900/30 p-5 rounded-2xl border border-neutral-800/80 backdrop-blur-sm shadow-xl mt-4 w-full max-w-[280px]"
+                >
+                  {/* Toggle buttons */}
+                  <div className="flex bg-neutral-950 rounded-xl p-1 border border-neutral-800/60 text-xs font-semibold w-full">
+                    <button
+                      onClick={() => setQrSource('web')}
+                      className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${
+                        qrSource === 'web' 
+                          ? 'bg-indigo-600 text-white shadow-md' 
+                          : 'text-neutral-400 hover:text-neutral-200'
+                      }`}
+                    >
+                      В браузер
+                    </button>
+                    <button
+                      onClick={() => setQrSource('tg')}
+                      className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${
+                        qrSource === 'tg' 
+                          ? 'bg-emerald-600 text-white shadow-md' 
+                          : 'text-neutral-400 hover:text-neutral-200'
+                      }`}
+                    >
+                      В Telegram
+                    </button>
+                  </div>
+
+                  {/* QR Code SVG */}
+                  <motion.div 
+                    whileHover={{ scale: 1.05 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 15 }}
+                    className="bg-white p-3 rounded-xl shadow-lg border border-neutral-200 flex items-center justify-center cursor-pointer"
+                  >
+                    <QRCodeSVG 
+                      id="qr-code-svg"
+                      value={qrUrl} 
+                      size={130} 
+                      bgColor="#FFFFFF"
+                      fgColor="#0A0A0A"
+                      level="M"
+                    />
+                  </motion.div>
+                  
+                  <p className="text-[10px] text-neutral-500 text-center font-medium leading-relaxed">
+                    Отсканируйте камерой телефона для быстрого подключения!
+                  </p>
+
+                  {/* Actions Bar */}
+                  <div className="flex flex-col gap-2 w-full">
+                    <div className="flex gap-2 w-full">
+                      {/* Copy Link Button */}
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => {
+                          const link = qrSource === 'web' 
+                            ? `https://jxovo.fun/room/${roomCode}` 
+                            : `https://t.me/JXOVO_bot/jxovo?startapp=${roomCode}`;
+                          copyToClipboard(link);
+                        }}
+                        className="flex-1 py-2.5 px-3 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer text-[11px] border border-neutral-700/60"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        Ссылка
+                      </motion.button>
+
+                      {/* Copy QR Button */}
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={handleCopyQR}
+                        className="flex-1 py-2.5 px-3 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer text-[11px] border border-neutral-700/60"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 002-2h2a2 2 0 002-2m0 0h2a2 2 0 012 2v3m-2 4h10m-5-5v10" />
+                        </svg>
+                        Копировать QR
+                      </motion.button>
+                    </div>
+
+                    {/* Mobile Native Share Button */}
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleShareInvite}
+                      className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-all shadow-md flex md:hidden items-center justify-center gap-1.5 cursor-pointer text-[11px]"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 10.742l4.606-2.303m0 0L17.5 7.5m-4.21 2.953l4.607 2.303M12 12a1 1 0 110-2 1 1 0 010 2zm0-5a1 1 0 110-2 1 1 0 010 2zm0 10a1 1 0 110-2 1 1 0 010 2z" />
+                      </svg>
+                      Поделиться
+                    </motion.button>
+                  </div>
+
+                  {/* Toast/Label Feedback */}
+                  <AnimatePresence mode="wait">
+                    {hasCopied && (
+                      <motion.p
+                        key="copied-link"
+                        initial={{ opacity: 0, y: -5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -5 }}
+                        transition={{ duration: 0.15 }}
+                        className="text-[10px] text-emerald-400 font-semibold animate-pulse text-center mt-1"
+                      >
+                        Ссылка скопирована!
+                      </motion.p>
+                    )}
+                    {qrCopied && (
+                      <motion.p
+                        key="copied-qr"
+                        initial={{ opacity: 0, y: -5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -5 }}
+                        transition={{ duration: 0.15 }}
+                        className="text-[10px] text-emerald-400 font-semibold animate-pulse text-center mt-1"
+                      >
+                        QR-код скопирован как картинка!
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+              );
+            })()}
           </div>
         </header>
 
@@ -1385,7 +1954,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
                     <button 
                       onClick={handleAddBot}
                       disabled={isAddingBot}
-                      className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 animate-gentle-blink"
+                      className="flex items-center gap-1.5 text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1.5 rounded-lg border border-neutral-700 transition-colors disabled:opacity-50 animate-gentle-blink cursor-pointer"
                     >
                       {isAddingBot ? (
                         <div className="w-3 h-3 border-2 border-neutral-400 border-t-transparent rounded-full animate-spin"></div>
@@ -1453,11 +2022,46 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
           )}
         </div>
 
+        {/* Cross-Platform Info Block */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="bg-neutral-900/40 border border-neutral-800/60 backdrop-blur-sm p-6 rounded-3xl shadow-xl space-y-4"
+        >
+          <h3 className="text-lg font-bold text-white flex items-center gap-2">
+            <span className="text-2xl">🌐</span> JXOVO — играй как удобно!
+          </h3>
+          <ul className="space-y-2.5 text-sm text-neutral-300">
+            <li className="flex items-center gap-2">
+              <span className="font-semibold text-indigo-400">Сайт:</span>
+              <a href="https://jxovo.fun" target="_blank" rel="noopener noreferrer" className="hover:underline text-indigo-300 transition-colors">
+                jxovo.fun
+              </a>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="font-semibold text-indigo-400">Бот:</span>
+              <a href="https://t.me/JXOVO_bot" target="_blank" rel="noopener noreferrer" className="hover:underline text-indigo-300 transition-colors">
+                @JXOVO_bot
+              </a>
+            </li>
+            <li className="flex items-center gap-2">
+              <span className="font-semibold text-indigo-400">Telegram:</span>
+              <a href="https://t.me/JXOVO_bot/jxovo" target="_blank" rel="noopener noreferrer" className="hover:underline text-indigo-300 transition-colors">
+                t.me/JXOVO_bot/jxovo
+              </a>
+            </li>
+          </ul>
+          <div className="pt-2 border-t border-neutral-800/40 text-xs text-neutral-400 font-medium">
+            Одна комната для всех — заходи из браузера или прямо в Telegram!
+          </div>
+        </motion.div>
+
         <div className="pt-6 pb-12 flex flex-col items-center w-full gap-3">
           {isHost ? (
             <button 
               onClick={handleStartGame}
-              className="w-full md:w-auto md:min-w-[280px] px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.2)] hover:shadow-[0_0_60px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98] text-lg"
+              className="w-full md:w-auto md:min-w-[280px] px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.2)] hover:shadow-[0_0_60px_rgba(16,185,129,0.3)] transition-all active:scale-[0.98] text-lg cursor-pointer"
             >
               Начать игру
             </button>
