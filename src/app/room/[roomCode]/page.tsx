@@ -378,8 +378,17 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
     return () => clearInterval(interval);
   }, [room?.status, room?.current_round, room?.current_question_id, hasAnswered, hasVoted]);
 
+  const lastStatusRef = useRef<string | null>(null);
+
   // Timer auto-submit and Host-driven fallback transition effect
   useEffect(() => {
+    if (!room?.status) return;
+
+    if (room.status !== lastStatusRef.current) {
+      lastStatusRef.current = room.status;
+      return;
+    }
+
     if (timeLeft === 0) {
       if (room?.status === 'Round 1' && !hasAnswered) {
         const submitRandomAnswer = async () => {
