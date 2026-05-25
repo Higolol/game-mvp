@@ -234,6 +234,13 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
 
       setRoom(roomData);
 
+      // Check if current user is actually in this room
+      const storedUserId = localStorage.getItem('user_id');
+      if (storedUserId && roomData.users_ids && !roomData.users_ids.includes(storedUserId)) {
+        router.push(`/?room=${roomCode}`);
+        return;
+      }
+
       if (roomData.users_ids && roomData.users_ids.length > 0) {
         const { data: usersData, error: usersError } = await supabase
           .from('players')
@@ -258,7 +265,7 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
   useEffect(() => {
     const storedUserId = localStorage.getItem('user_id');
     if (!storedUserId) {
-      router.push('/');
+      router.push(`/?room=${roomCode}`);
       return;
     }
     setUserId(storedUserId);

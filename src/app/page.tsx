@@ -110,8 +110,8 @@ export default function Home() {
     setHostError(null);
 
     try {
-      // 1. Generate random 4-character alphanumeric uppercase room code
-      const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+      // 1. Generate random 6-digit numeric room code
+      const roomCode = Math.floor(100000 + Math.random() * 900000).toString();
 
       const generatedId = (isTelegramEnv && telegramUserId) 
         ? telegramUserId 
@@ -161,9 +161,15 @@ export default function Home() {
     setIsJoinLoading(true);
     setJoinError(null);
 
-    try {
-      const formattedCode = joinCode.trim().toUpperCase();
+    const formattedCode = joinCode.trim();
 
+    if (formattedCode.length !== 6 || !/^\d+$/.test(formattedCode)) {
+      setJoinError('Код комнаты должен состоять из 6 цифр');
+      setIsJoinLoading(false);
+      return;
+    }
+
+    try {
       // 1. Verify room exists and is waiting
       const { data: roomData, error: roomError } = await supabase
         .from('rooms')
@@ -312,11 +318,13 @@ export default function Home() {
                         </label>
                         <input
                           type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           id="roomCode"
                           value={joinCode}
-                          onChange={(e) => setJoinCode(e.target.value)}
-                          maxLength={4}
-                          placeholder="Например, ABCD"
+                          onChange={(e) => setJoinCode(e.target.value.replace(/\D/g, ''))}
+                          maxLength={6}
+                          placeholder="Например, 123456"
                           className="w-full bg-neutral-800/50 border border-neutral-700 rounded-xl px-4 py-3 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all font-mono font-black tracking-widest uppercase text-lg text-center"
                           required
                           disabled={isJoinLoading}
