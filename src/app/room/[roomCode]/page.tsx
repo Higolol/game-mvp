@@ -485,37 +485,63 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
       let isMounted = true;
       
       const calculateResults = async () => {
-        const { data: answers } = await supabase
-          .from('answers')
-          .select('*')
-          .eq('room_code', roomCode)
-          .eq('question_id', room.current_question_id!);
-          
-        const { data: votes } = await supabase
-          .from('votes')
-          .select('*')
-          .eq('room_code', roomCode);
-          
-        if (answers && votes && isMounted) {
-          const tallies: Record<string, number> = {};
-          votes.forEach(v => {
-            tallies[v.answer_id] = (tallies[v.answer_id] || 0) + 1;
-          });
-          
-          const resultsArray: VoteResult[] = answers.map(ans => {
-            const author = players.find(p => p.id === ans.user_id);
-            return {
-              answer_id: ans.id,
-              answer_text: ans.answer_text,
-              author_id: ans.user_id,
-              author_nickname: author?.nickname || 'Неизвестный',
-              author_role: author?.role || 'Player',
-              votes: tallies[ans.id] || 0
-            };
-          });
-          
-          resultsArray.sort((a, b) => b.votes - a.votes);
-          if (isMounted) {
+        try {
+          const { data: answers, error: ansError } = await supabase
+            .from('answers')
+            .select('*')
+            .eq('room_code', roomCode)
+            .eq('question_id', room.current_question_id!);
+            
+          if (ansError) throw ansError;
+
+          let votesData: any[] = [];
+          let attempts = 0;
+          const maxAttempts = 15;
+          const expectedVotesCount = players.length;
+
+          while (attempts < maxAttempts) {
+            const { data: votes, error: votesError } = await supabase
+              .from('votes')
+              .select('*')
+              .eq('room_code', roomCode);
+
+            if (votesError) throw votesError;
+
+            votesData = votes || [];
+
+            // If we have fetched at least the expected number of votes, we can proceed
+            if (votesData.length >= expectedVotesCount) {
+              console.log(`Successfully fetched complete votes (${votesData.length}/${expectedVotesCount}) on attempt ${attempts + 1}`);
+              break;
+            }
+
+            console.log(`Incomplete votes fetched (${votesData.length}/${expectedVotesCount}). Retrying in 300ms...`);
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+
+          if (!isMounted) return;
+
+          if (answers && votesData) {
+            const tallies: Record<string, number> = {};
+            votesData.forEach(v => {
+              tallies[v.answer_id] = (tallies[v.answer_id] || 0) + 1;
+            });
+            
+            const resultsArray: VoteResult[] = answers.map(ans => {
+              const author = players.find(p => p.id === ans.user_id);
+              return {
+                answer_id: ans.id,
+                answer_text: ans.answer_text,
+                author_id: ans.user_id,
+                author_nickname: author?.nickname || 'Неизвестный',
+                author_role: author?.role || 'Player',
+                votes: tallies[ans.id] || 0
+              };
+            });
+            
+            resultsArray.sort((a, b) => b.votes - a.votes);
+            
             setRoundResults(resultsArray);
             
             const currentRound = room?.current_round || 1;
@@ -546,6 +572,8 @@ export default function RoomLobby({ params }: { params: Promise<{ roomCode: stri
               }
             }
           }
+        } catch (err) {
+          console.error('Error calculating results:', err);
         }
       };
       
