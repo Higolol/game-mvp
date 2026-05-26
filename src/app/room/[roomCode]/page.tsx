@@ -38,6 +38,7 @@ function useGameMusic(status: string | undefined) {
 
   const lobbyAudioRef = useRef<HTMLAudioElement | null>(null);
   const resultsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const lastStatusRef = useRef<string | null>(null);
 
   // Initialize audio elements
   useEffect(() => {
@@ -72,21 +73,60 @@ function useGameMusic(status: string | undefined) {
     const resultsAudio = resultsAudioRef.current;
     if (!lobbyAudio || !resultsAudio) return;
 
-    const isResultsState = status === 'Round Results' || status === 'Leaderboard';
+    const currentStatus = status || 'Waiting';
+    console.log('Current room status:', currentStatus);
 
-    if (isResultsState) {
-      lobbyAudio.pause();
-      if (!isMuted) {
-        resultsAudio.play().catch(() => {
-          // Blocked initially until interaction
-        });
+    const isGameOver = 
+      currentStatus === 'Game Over' || 
+      currentStatus === 'Final Results' || 
+      currentStatus === 'Results' || 
+      currentStatus === 'Leaderboard';
+
+    const wasGameOver = 
+      lastStatusRef.current === 'Game Over' || 
+      lastStatusRef.current === 'Final Results' || 
+      lastStatusRef.current === 'Results' || 
+      lastStatusRef.current === 'Leaderboard';
+
+    const statusBoundaryCrossed = lastStatusRef.current === null || isGameOver !== wasGameOver;
+
+    if (statusBoundaryCrossed) {
+      if (isGameOver) {
+        // Pause and reset main track
+        lobbyAudio.pause();
+        lobbyAudio.currentTime = 0;
+        
+        // Play final track
+        if (!isMuted) {
+          resultsAudio.play().catch(err => {
+            console.warn("Space Walk West playback failed:", err);
+          });
+        }
+      } else {
+        // Pause and reset final track
+        resultsAudio.pause();
+        resultsAudio.currentTime = 0;
+
+        // Play main track
+        if (!isMuted) {
+          lobbyAudio.play().catch(err => {
+            console.warn("Get The Bleep Up playback failed:", err);
+          });
+        }
       }
+      lastStatusRef.current = currentStatus;
     } else {
-      resultsAudio.pause();
+      // If status didn't change but isMuted did, and we are unmuted, make sure the correct audio is playing
       if (!isMuted) {
-        lobbyAudio.play().catch(() => {
-          // Blocked initially until interaction
-        });
+        if (isGameOver) {
+          if (resultsAudio.paused) {
+            resultsAudio.play().catch(() => {});
+          }
+        } else {
+          if (lobbyAudio.paused) {
+            lobbyAudio.play().catch(() => {});
+          }
+        }
       }
     }
   }, [status, isMuted]);
@@ -98,11 +138,15 @@ function useGameMusic(status: string | undefined) {
       const resultsAudio = resultsAudioRef.current;
       if (!lobbyAudio || !resultsAudio || isMuted) return;
 
-      const isResultsState = status === 'Round Results' || status === 'Leaderboard';
+      const isGameOver = 
+        status === 'Game Over' || 
+        status === 'Final Results' || 
+        status === 'Results' || 
+        status === 'Leaderboard';
 
-      if (isResultsState && resultsAudio.paused) {
+      if (isGameOver && resultsAudio.paused) {
         resultsAudio.play().catch(() => {});
-      } else if (!isResultsState && lobbyAudio.paused) {
+      } else if (!isGameOver && lobbyAudio.paused) {
         lobbyAudio.play().catch(() => {});
       }
     };
